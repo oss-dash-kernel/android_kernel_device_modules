@@ -8,12 +8,23 @@
 
 #include <linux/regmap.h>
 #include <linux/delay.h>
+#include <linux/module.h>
 #include "mt6991-afe-clk.h"
 #include "mt6991-afe-common.h"
 #include "mt6991-afe-gpio.h"
 #include "mt6991-interconnection.h"
 
 #define MTKAIF4 //for  mt6338
+
+/* Debug aid for the AP-DMIC uplink path: dumps AFE_ADDA_ULx_SRC_CON0/CON1 so
+ * a normal bugreport shows whether the HAL really muxed the capture to
+ * AP-DMIC and which gain/mode the SRC is running with. No root needed.
+ */
+static int mt6991_adda_dump = 1;
+module_param_named(adda_ul_src_dump, mt6991_adda_dump, int, 0644);
+MODULE_PARM_DESC(adda_ul_src_dump,
+		 "Dump ADDA UL SRC registers around DMIC capture (0=off)");
+
 /* mt6363 vs1 voter */
 #define RG_BUCK_VS1_VOTER_EN_LO                 0x189a
 #define RG_BUCK_VS1_VOTER_EN_LO_SET             0x189b
@@ -473,6 +484,59 @@ static int mtk_adda_ul_src_dmic(struct mtk_base_afe *afe, int id)
 	return 0;
 }
 
+static void mtk_adda_dump_ul_src(struct mtk_base_afe *afe, const char *tag,
+				 int id)
+{
+	struct mt6991_afe_private *afe_priv = afe->platform_priv;
+	unsigned int reg_con0, reg_con1;
+	unsigned int con0 = 0, con1 = 0, cfg0 = 0;
+
+	if (!mt6991_adda_dump)
+		return;
+
+	switch (id) {
+	case MT6991_DAI_ADDA_CH34:
+	case MT6991_DAI_AP_DMIC_CH34:
+		reg_con0 = AFE_ADDA_UL1_SRC_CON0;
+		reg_con1 = AFE_ADDA_UL1_SRC_CON1;
+		break;
+	case MT6991_DAI_ADDA_CH56:
+	case MT6991_DAI_AP_DMIC_CH56:
+		reg_con0 = AFE_ADDA_UL2_SRC_CON0;
+		reg_con1 = AFE_ADDA_UL2_SRC_CON1;
+		break;
+	default:
+		reg_con0 = AFE_ADDA_UL0_SRC_CON0;
+		reg_con1 = AFE_ADDA_UL0_SRC_CON1;
+		break;
+	}
+
+	if (regmap_read(afe->regmap, reg_con0, &con0) ||
+	    regmap_read(afe->regmap, reg_con1, &con1)) {
+		dev_info(afe->dev, "%s[%d]: register read failed\n", tag, id);
+		return;
+	}
+	regmap_read(afe->regmap, AFE_MTKAIF0_RX_CFG0, &cfg0);
+
+	dev_info(afe->dev,
+		 "%s[%d]: CON0=0x%08x CON1=0x%08x MTKAIF0_RX_CFG0=0x%08x ap_dmic_on=%u ch1_3p25m=%u ch2_3p25m=%u sdm3lvl=%u digmic_1p625m_sel=%u dmic_lp=%u phase1=%u phase2=%u ul_gain=0x%04x postgain=0x%x gain_mode=0x%x fifo_rst=%u sw=(ap_dmic %d, mtkaif_dmic %d, ch34 %d)\n",
+		 tag, id, con0, con1, cfg0,
+		 (con0 >> UL_AP_DMIC_ON_SFT) & 0x1,
+		 (con0 >> UL_MODE_3P25M_CH1_CTL_SFT) & 0x1,
+		 (con0 >> UL_MODE_3P25M_CH2_CTL_SFT) & 0x1,
+		 (con0 >> UL_SDM_3_LEVEL_CTL_SFT) & 0x1,
+		 (con0 >> DIGMIC_3P25M_1P625M_SEL_CTL_SFT) & 0x1,
+		 (con0 >> DMIC_LOW_POWER_MODE_CTL_SFT) & 0x1,
+		 (con0 >> UL_DMIC_PHASE_SEL_CH1_SFT) & 0x7,
+		 (con0 >> UL_DMIC_PHASE_SEL_CH2_SFT) & 0x7,
+		 (con1 >> ADDA_UL_GAIN_VALUE_SFT) & 0xffff,
+		 (con1 >> ADDA_UL_POSTIVEGAIN_SFT) & 0x7,
+		 (con1 >> GAIN_MODE_SFT) & 0x3,
+		 (con1 >> FIFO_SOFT_RST_SFT) & 0x1,
+		 afe_priv->ap_dmic, afe_priv->mtkaif_dmic,
+		 afe_priv->mtkaif_dmic_ch34);
+}
+
 static int mtk_adda_ul_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *kcontrol,
 			     int event)
@@ -502,6 +566,7 @@ static int mtk_adda_ul_event(struct snd_soc_dapm_widget *w,
 			mtk_adda_ul_src_dmic(afe, MT6991_DAI_ADDA);
 		}
 		mtk_final_dump(afe);
+		mtk_adda_dump_ul_src(afe, "ADDA-PRE", MT6991_DAI_ADDA);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		/* should delayed 1/fs(smallest is 8k) = 125us before afe off */
@@ -671,10 +736,12 @@ static int mtk_adda_ul_ap_dmic_event(struct snd_soc_dapm_widget *w,
 		 * analog and NR captures are not switched to DMIC mode.
 		 */
 		mtk_adda_ul_src_dmic(afe, MT6991_DAI_ADDA);
+		mtk_adda_dump_ul_src(afe, "APDMIC-PRE", MT6991_DAI_ADDA);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		/* should delayed 1/fs(smallest is 8k) = 125us before afe off */
 		udelay(125);
+		mtk_adda_dump_ul_src(afe, "APDMIC-POST", MT6991_DAI_ADDA);
 		mt6991_afe_gpio_request(afe, false, MT6991_DAI_ADDA, 1);
 		mt6991_afe_gpio_request(afe, false, MT6991_DAI_AP_DMIC, 1);
 		break;
@@ -1113,6 +1180,7 @@ static int mt6991_adda_ap_dmic_set(struct snd_kcontrol *kcontrol,
 		 __func__, kcontrol->id.name, ap_dmic_on);
 
 	afe_priv->ap_dmic = ap_dmic_on;
+	mtk_adda_dump_ul_src(afe, "KCTL-APDMIC", MT6991_DAI_ADDA);
 	return 0;
 }
 
@@ -1146,6 +1214,7 @@ static int mt6991_adda_dmic_set(struct snd_kcontrol *kcontrol,
 
 	afe_priv->mtkaif_dmic = dmic_on;
 	afe_priv->mtkaif_dmic_ch34 = dmic_on;
+	mtk_adda_dump_ul_src(afe, "KCTL-DMIC", MT6991_DAI_ADDA);
 	return 0;
 }
 
