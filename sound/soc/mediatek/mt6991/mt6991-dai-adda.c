@@ -25,6 +25,24 @@ module_param_named(adda_ul_src_dump, mt6991_adda_dump, int, 0644);
 MODULE_PARM_DESC(adda_ul_src_dump,
 		 "Dump ADDA UL SRC registers around DMIC capture (0=off)");
 
+/* Force the MTKAIF DMIC path on for the voice uplink.
+ *
+ * The vendor HAL writes MTKAIF_DMIC=0 at call setup even though this board
+ * routes the handset mic over AP-DMIC. Forcing the flag to 1 used to fix the
+ * quiet far end (see a325427), but it overrode the HAL unconditionally and for
+ * every capture path. Keep it opt-in so it can be A/B tested without changing
+ * the default behaviour:
+ *
+ *   echo 1 > /sys/module/snd_soc_mt6991_afe/parameters/force_mtkaif_dmic
+ *
+ * The flag is consumed by mtk_adda_ul_event() when the capture starts, so it
+ * must be set before a call is placed.
+ */
+static bool dash_force_mtkaif_dmic;
+module_param_named(force_mtkaif_dmic, dash_force_mtkaif_dmic, bool, 0644);
+MODULE_PARM_DESC(force_mtkaif_dmic,
+		 "Force MTKAIF_DMIC on for the voice uplink (0=off)");
+
 /* mt6363 vs1 voter */
 #define RG_BUCK_VS1_VOTER_EN_LO                 0x189a
 #define RG_BUCK_VS1_VOTER_EN_LO_SET             0x189b
@@ -1216,8 +1234,12 @@ static int mt6991_adda_dmic_set(struct snd_kcontrol *kcontrol,
 
 	dmic_on = ucontrol->value.integer.value[0];
 
-	dev_info(afe->dev, "%s(), kcontrol name %s, dmic_on %d\n",
-		 __func__, kcontrol->id.name, dmic_on);
+	if (dash_force_mtkaif_dmic && !dmic_on)
+		dmic_on = 1;
+
+	dev_info(afe->dev, "%s(), kcontrol name %s, dmic_on %d (requested %ld)\n",
+		 __func__, kcontrol->id.name, dmic_on,
+		 ucontrol->value.integer.value[0]);
 
 	afe_priv->mtkaif_dmic = dmic_on;
 	afe_priv->mtkaif_dmic_ch34 = dmic_on;
