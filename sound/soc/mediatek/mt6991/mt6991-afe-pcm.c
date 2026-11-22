@@ -47,6 +47,18 @@
 #include <sched.h>
 #include "vip.h"
 
+/*
+ * dash: opt-in VUL7 (modem uplink) level probe.
+ *
+ * Disabled by default so that a production build never prints per-second
+ * audio dumps. Enable at runtime with:
+ *   echo 1 > /sys/module/snd_soc_mt6991_afe/parameters/vul7_uplink_log
+ */
+static bool dash_vul7_log;
+module_param_named(vul7_uplink_log, dash_vul7_log, bool, 0644);
+MODULE_PARM_DESC(vul7_uplink_log,
+		 "Log the VUL7 modem uplink peak/avg once per second");
+
 #if IS_ENABLED(CONFIG_NEBULA_SND_PASSTHROUGH)
 #include <linux/nebula/hvcall.h>
 #include <linux/irq.h>
@@ -7004,6 +7016,38 @@ static irqreturn_t mt6991_afe_irq_handler(int irq_id, void *dev)
 		} else {
 			if (status_mcu & (0x1 << irq->irq_data->id))
 				snd_pcm_period_elapsed(memif->substream);
+		}
+
+		/* dash: opt-in VUL7 (modem uplink) level probe */
+		if (dash_vul7_log && i == MT6991_MEMIF_VUL7 && memif->dma_area &&
+		    memif->dma_bytes >= 4) {
+			static unsigned long vul7_next;
+			static unsigned int vul7_peak;
+			static unsigned int vul7_avg;
+
+			if (time_after(jiffies, vul7_next)) {
+				const s16 *p = (const s16 *)memif->dma_area;
+				size_t n = min_t(size_t, memif->dma_bytes, 4096) / 2;
+				unsigned int k;
+
+				vul7_peak = 0;
+				vul7_avg = 0;
+				for (k = 0; k < n; k++) {
+					int v = (int)p[k];
+					unsigned int a = v < 0 ?
+						(unsigned int)-v : (unsigned int)v;
+
+					if (a > vul7_peak)
+						vul7_peak = a;
+					vul7_avg += a;
+				}
+				if (n)
+					vul7_avg /= n;
+				dev_info(afe->dev,
+					 "dash: VUL7 uplink peak=%u avg=%u n=%zu\n",
+					 vul7_peak, vul7_avg, n);
+				vul7_next = jiffies + HZ;
+			}
 		}
 	}
 
