@@ -77,7 +77,6 @@ static int mt6379_adc_read_channel(struct mt6379_priv *priv, int chan, int *val)
 	__be16 be_val = 0;
 
 	mutex_lock(&priv->lock);
-	pm_stay_awake(priv->dev);
 
 	switch (chan) {
 	case MT6379_ADC_VBATMON:
@@ -167,7 +166,6 @@ bypass_oneshot:
 	ret = IIO_VAL_INT;
 
 adc_unlock:
-	pm_relax(priv->dev);
 	mutex_unlock(&priv->lock);
 
 	return ret;
