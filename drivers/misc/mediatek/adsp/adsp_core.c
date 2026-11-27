@@ -676,12 +676,6 @@ int adsp_reset(void)
 		if (adspsys->desc->version == 1)
 			adsp_update_mpu_memory_info(pdata);
 
-		/* Firmware reload discards the MT6991 64-bit C2C boot header. */
-		if (get_adsp_core_total() > 1 &&
-		    pdata->mapping_table[ADSP_SHAREDMEM_C2C_BUFINFO].size ==
-			    sizeof(struct adsp_c2c_share_dram_info64))
-			adsp_update_c2c_memory_info(pdata);
-
 		reinit_completion(&pdata->done);
 		adsp_core_start(cid);
 		ret = wait_for_completion_timeout(&pdata->done, HZ);

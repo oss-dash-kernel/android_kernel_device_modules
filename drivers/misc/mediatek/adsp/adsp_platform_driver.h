@@ -149,13 +149,6 @@ struct adsp_c2c_share_dram_info_t {
 	u32 share_dram_size;
 };
 
-struct adsp_c2c_share_dram_info64 {
-	u64 share_dram_addr;
-	u64 share_dram_size;
-};
-
-void adsp_update_c2c_memory_info(struct adsp_priv *pdata);
-
 extern const struct file_operations adspsys_file_ops;
 extern struct attribute_group adsp_excep_attr_group;
 extern const struct file_operations adsp_debug_ops;
