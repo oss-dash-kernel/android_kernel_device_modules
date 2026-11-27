@@ -4,7 +4,6 @@
  */
 
 #include <linux/of.h>
-#include <linux/io.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/vmalloc.h>
@@ -37,26 +36,6 @@ static bool resume_first_time = true;
 void adsp_update_c2c_memory_info(struct adsp_priv *pdata)
 {
 	struct adsp_c2c_share_dram_info_t c2c_info;
-	const struct sharedmem_info *item =
-		&pdata->mapping_table[ADSP_SHAREDMEM_C2C_BUFINFO];
-
-	if (item->size == sizeof(struct adsp_c2c_share_dram_info64)) {
-		struct adsp_c2c_share_dram_info64 info = {
-			.share_dram_addr = adsp_get_reserve_mem_phys(ADSP_C2C_MEM_ID),
-			.share_dram_size = adsp_get_reserve_mem_size(ADSP_C2C_MEM_ID),
-		};
-
-		/* MT6991 HyperOS 4 firmware reads the 64-bit header from DTCM, not L2. */
-		if (!pdata->dtcm || item->offset > pdata->dtcm_size ||
-		    item->offset < sizeof(info)) {
-			pr_warn("%s: invalid C2C DTCM mapping\n", __func__);
-			return;
-		}
-
-		memcpy_toio(pdata->dtcm + pdata->dtcm_size - item->offset,
-			    &info, sizeof(info));
-		return;
-	}
 
 	c2c_info.share_dram_addr = adsp_get_reserve_mem_phys(ADSP_C2C_MEM_ID);
 	c2c_info.share_dram_size = adsp_get_reserve_mem_size(ADSP_C2C_MEM_ID);
@@ -513,10 +492,7 @@ int adsp_core0_init(struct adsp_priv *pdata)
 
 	ret = adsp_core_common_init(pdata);
 
-	if (get_adsp_core_total() > 1 &&
-	    (adspsys->desc->version == 1 ||
-	     pdata->mapping_table[ADSP_SHAREDMEM_C2C_BUFINFO].size ==
-		     sizeof(struct adsp_c2c_share_dram_info64)))
+	if (adspsys->desc->version == 1 && get_adsp_core_total() > 1)
 		adsp_update_c2c_memory_info(pdata); /* only 2 core needed */
 
 	return ret;
